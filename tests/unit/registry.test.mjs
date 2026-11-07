@@ -99,11 +99,16 @@ test('findProvider returns the provider or null', () => {
   assert.equal(findProvider('nope'), null);
 });
 
-test('the panel shows no number: the tooltip has only the widget name', () => {
+test('a horizontal panel shows the account percents, a vertical one keeps the icon, and the tooltip lists the limits', () => {
   const main = readFileSync(join(PACKAGE, 'contents', 'ui', 'main.qml'), 'utf8');
+  const compact = readFileSync(join(PACKAGE, 'contents', 'ui', 'CompactView.qml'), 'utf8');
   assert.match(main, /toolTipMainText: "AI usage"/);
-  assert.match(main, /toolTipSubText: ""/);
-  assert.doesNotMatch(readFileSync(join(PACKAGE, 'contents', 'ui', 'CompactView.qml'), 'utf8'), /percent|viewModel/i);
+  assert.match(main, /toolTipSubText: usage\.viewModel\.sections\.filter\(section => section\.windows\.length > 0\)/);
+  assert.match(main, /viewModel: usage\.viewModel/);
+  assert.match(main, /horizontal: Plasmoid\.formFactor !== PlasmaCore\.Types\.Vertical/);
+  assert.match(compact, /readonly property bool showSegments: compact\.horizontal && compact\.segments\.length > 0/);
+  assert.match(compact, /objectName: "panelIcon"[\s\S]*visible: !compact\.showSegments/);
+  assert.match(compact, /text: modelData\.percentText/);
 });
 
 test('the widget needs Plasma 6.4, the first release with SignalWatcher and asyncCall with callbacks', () => {

@@ -55,7 +55,7 @@ ColumnLayout {
         textFormat: Text.PlainText
         color: limit.item.isExpired ? Kirigami.Theme.disabledTextColor : Kirigami.Theme.textColor
         font.bold: true
-        font.pixelSize: Math.round(Kirigami.Theme.defaultFont.pixelSize * 2.1)
+        font.pointSize: Kirigami.Theme.defaultFont.pointSize * 2.1
         font.features: { "tnum": 1 }
         Accessible.ignored: true
     }

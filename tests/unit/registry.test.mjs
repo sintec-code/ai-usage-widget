@@ -19,10 +19,10 @@ test('the registry lists every service once, in the order of the service picker'
   assert.deepEqual(ALL_PROVIDERS.map((p) => p.title), ['Claude', 'ChatGPT', 'OpenAI API', 'Anthropic API', 'xAI API', 'OpenCode Go', 'OpenCode Zen', 'MiniMax', 'Requesty', 'Hugging Face', 'JetBrains AI']);
 });
 
-test('spend services are asked at most every 5 minutes, subscription limits follow the refresh choice', () => {
+test('spend services are asked at most every 5 minutes, Claude at most every 3 because its usage API rate limits, other subscription limits follow the refresh choice', () => {
   const floors = {};
   ALL_PROVIDERS.forEach((provider) => { floors[provider.id] = provider.minIntervalSeconds; });
-  assert.deepEqual(floors, { claude: 0, chatgpt: 0, openai: 300, anthropic: 300, xai: 300, opencodeGo: 0, opencodeZen: 300, minimax: 0, requesty: 300, huggingFace: 300, jetbrains: 0 });
+  assert.deepEqual(floors, { claude: 180, chatgpt: 0, openai: 300, anthropic: 300, xai: 300, opencodeGo: 0, opencodeZen: 300, minimax: 0, requesty: 300, huggingFace: 300, jetbrains: 0 });
 });
 
 test('every provider id is a valid label, so it is safe inside a secret-tool command', () => {
@@ -58,7 +58,7 @@ test('only the Claude and ChatGPT local providers call an API, over HTTPS only a
     const calls = provider.readCommand.match(/\| curl [^|]*/g);
     assert.equal(calls.length, 1, provider.id);
     assert.match(calls[0], /^\| curl -fsS --proto =https --max-redirs 0 -m \d+ -H @- /, provider.id);
-    assert.match(calls[0], / https:\/\/[^ ]+ 2>\/dev\/null $/, provider.id);
+    assert.match(calls[0], / https:\/\/[^ ]+ 2>\/dev\/null[ )]/, provider.id);
     assert.doesNotMatch(calls[0], /\$a|Bearer/, provider.id);
   });
 });

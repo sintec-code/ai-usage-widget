@@ -9,7 +9,7 @@ import { checkAccount, discoverAccounts } from '../../../package/contents/code/c
 import { ERROR_KIND, REASON, failure } from '../../../package/contents/code/core/http.mjs';
 import { HOUR_MS, WEEK_MS } from '../../../package/contents/code/core/units.mjs';
 import { PERIOD, makeUsage, usageWindow } from '../../../package/contents/code/core/usage.mjs';
-import { fakeHome, placeFixture, placeText, shellRunner, removeFakeHomes, fakeCurl, curlCall } from '../support/localFiles.mjs';
+import { fakeHome, placeFixture, placeText, shellRunner, removeFakeHomes, fakeCurl, curlCall, setCurlStatus } from '../support/localFiles.mjs';
 
 afterEach(removeFakeHomes);
 
@@ -243,4 +243,44 @@ test('discovery offers the organization of the Claude Code login with its live u
   const env = fakeCurl(home, LIVE_REPLY);
   const found = await discoverAccounts(claudeDesktop, liveTools(home, env));
   assert.deepEqual(found.items, [{ fields: { org: ORG_A }, usage: LIVE_USAGE }]);
+});
+
+test('Claude is checked at most every 3 minutes, since its usage API rate limits frequent calls', () => {
+  assert.equal(claudeDesktop.minIntervalSeconds, 180);
+});
+
+test('a rate limited usage API keeps the last live values instead of the older desktop app history', async () => {
+  const home = homeWithFixture();
+  placeClaudeLogin(home, ORG_A, Date.now() + HOUR_MS);
+  const env = fakeCurl(home, null);
+  setCurlStatus(home, 429);
+  const outcome = await checkAccount(claudeDesktop, account(ORG_A), liveTools(home, env));
+  assert.deepEqual(outcome, { ok: false, error: failure(ERROR_KIND.RATE_LIMITED, REASON.HTTP_STATUS, NOW + 5 * 60 * 1000, { status: 429 }) });
+});
+
+test('another failing status of the usage API still falls back to the desktop app history', async () => {
+  const home = homeWithFixture();
+  placeClaudeLogin(home, ORG_A, Date.now() + HOUR_MS);
+  const env = fakeCurl(home, null);
+  setCurlStatus(home, 500);
+  const outcome = await checkAccount(claudeDesktop, account(ORG_A), liveTools(home, env));
+  assert.ok(outcome.ok && outcome.usage.windows.every((window) => window.estimated));
+});
+
+test('discovery ignores a rate limited usage API and offers the history organizations', async () => {
+  const home = homeWithFixture();
+  placeClaudeLogin(home, ORG_A, Date.now() + HOUR_MS);
+  const env = fakeCurl(home, null);
+  setCurlStatus(home, 429);
+  const found = await discoverAccounts(claudeDesktop, liveTools(home, env));
+  assert.ok(found.ok && found.items.length > 0 && found.items.every((item) => item.usage.windows.every((window) => window.estimated)));
+});
+
+test('a rate limited usage API for the Claude Code organization leaves accounts of other organizations on the desktop app history', async () => {
+  const home = homeWithFixture();
+  placeClaudeLogin(home, ORG_B, Date.now() + HOUR_MS);
+  const env = fakeCurl(home, null);
+  setCurlStatus(home, 429);
+  const outcome = await checkAccount(claudeDesktop, account(ORG_A), liveTools(home, env));
+  assert.ok(outcome.ok && outcome.usage.windows.every((window) => window.estimated));
 });

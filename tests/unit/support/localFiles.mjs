@@ -50,10 +50,18 @@ export function fakeCurl(home, reply) {
   const bin = join(home, 'fake-bin');
   mkdirSync(bin, { recursive: true });
   const script = join(bin, 'curl');
+  // With -w the fake prints "\n<status>" after the body, like -w "\n%{http_code}".
   writeFileSync(script, '#!/bin/sh\ncat > "$HOME/curl-stdin"\nprintf "%s\\n" "$@" > "$HOME/curl-args"\n'
-    + 'if [ -f "$HOME/curl-reply" ]; then cat "$HOME/curl-reply"; else exit 22; fi\n', { mode: 0o755 });
+    + 'w=no; for arg in "$@"; do if [ "$arg" = "-w" ]; then w=yes; fi; done\n'
+    + 'status=200; if [ -f "$HOME/curl-status" ]; then status=$(cat "$HOME/curl-status"); fi\n'
+    + 'if [ -f "$HOME/curl-reply" ] && [ "$status" = 200 ]; then cat "$HOME/curl-reply"; if [ $w = yes ]; then printf "\\n200"; fi; exit 0; fi\n'
+    + 'if [ $w = yes ]; then printf "\\n%s" "$status"; fi; exit 22\n', { mode: 0o755 });
   setCurlReply(home, reply);
   return { PATH: bin + ':' + process.env.PATH };
+}
+
+export function setCurlStatus(home, status) {
+  writeFileSync(join(home, 'curl-status'), String(status));
 }
 
 export function setCurlReply(home, reply) {

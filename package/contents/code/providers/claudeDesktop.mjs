@@ -1,11 +1,10 @@
-import { REASON } from '../core/http.mjs';
+import { ERROR_KIND, REASON, failure } from '../core/http.mjs';
 import { toFiniteNumber, isPlainObject } from '../core/values.mjs';
 import { MINUTE_MS, HOUR_MS, WEEK_MS } from '../core/units.mjs';
 import { PERIOD, DISCOVERY, makeUsage, usageWindow, succeeded, unexpected, notAvailable } from '../core/usage.mjs';
 import { isValidField } from '../core/accounts.mjs';
 import { LIMIT, FOUND_LINE, MISSING_OUTPUT, wrapRead } from '../core/localRead.mjs';
 import { KIND } from '../core/providerKind.mjs';
-import { NO_MIN_INTERVAL_SECONDS } from './common.mjs';
 
 export const MAX_HISTORY_BYTES = 1048576;
 export const HISTORY_VERSION = 2;
@@ -19,6 +18,10 @@ const WINDOWS = [
 ];
 
 export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+// The usage API answers 429 to frequent calls, so Claude is checked at most
+// this often, and a 429 waits RATE_LIMIT_WAIT_MS while the last values stay.
+export const MIN_INTERVAL_SECONDS = 180;
+export const RATE_LIMIT_WAIT_MS = 5 * MINUTE_MS;
 export const API_TIMEOUT_SECONDS = 4;
 
 // Reduces the live usage API answer to one compact JSON line:
@@ -38,9 +41,11 @@ const READ_LIVE_SCRIPT = String.raw`live=""; c="$HOME/.claude/.credentials.json"
   + String.raw`org=$(jq -r ".oauthAccount.organizationUuid // empty" "$HOME/.claude.json" 2>/dev/null); `
   + String.raw`now=$(date +%s); `
   + String.raw`if [ -n "$a" ] && [ -n "$org" ] && [ "$exp" -gt "$now"000 ] 2>/dev/null; then `
-  + String.raw`live=$(printf "Authorization: Bearer %s\n" "$a" | curl -fsS --proto =https --max-redirs 0 -m ` + API_TIMEOUT_SECONDS
-  + String.raw` -H @- -H "anthropic-beta: oauth-2025-04-20" ` + USAGE_URL
-  + String.raw` 2>/dev/null | jq -c --arg o "$org" "` + LIVE_FILTER + String.raw`" 2>/dev/null); `
+  + String.raw`resp=$(printf "Authorization: Bearer %s\n" "$a" | curl -fsS --proto =https --max-redirs 0 -m ` + API_TIMEOUT_SECONDS
+  + String.raw` -H @- -H "anthropic-beta: oauth-2025-04-20" -w "\n%{http_code}" ` + USAGE_URL + String.raw` 2>/dev/null); `
+  + String.raw`code=$(printf "%s" "$resp" | tail -n 1); `
+  + String.raw`if [ "$code" = 200 ]; then live=$(printf "%s" "$resp" | sed "\$d" | jq -c --arg o "$org" "` + LIVE_FILTER + String.raw`" 2>/dev/null); `
+  + String.raw`elif [ "$code" = 429 ]; then live="{\"rateLimited\":true,\"org\":\"$org\"}"; fi; `
   + String.raw`fi; fi; `;
 
 // Output after the "found <size>" line: the live JSON line (empty when the API
@@ -77,6 +82,9 @@ export function parseLive(line) {
     value = JSON.parse(line);
   } catch (error) {
     return null;
+  }
+  if (isPlainObject(value) && value.rateLimited === true) {
+    return isValidField(value.org) ? { rateLimited: true, org: value.org } : null;
   }
   if (!isPlainObject(value) || !isValidField(value.org)) {
     return null;
@@ -195,7 +203,10 @@ function interpret(read, account, now) {
   }
   const parts = splitRead(read.text);
   const live = parseLive(parts.live);
-  if (live !== null && live.org === account.org) {
+  if (live !== null && live.rateLimited && live.org === account.org) {
+    return { ok: false, error: failure(ERROR_KIND.RATE_LIMITED, REASON.HTTP_STATUS, now + RATE_LIMIT_WAIT_MS, { status: 429 }) };
+  }
+  if (live !== null && !live.rateLimited && live.org === account.org) {
     return succeeded(live.usage);
   }
   if (parts.history.trim() === '') {
@@ -217,7 +228,8 @@ function discover(read, now) {
     return notAvailable(REASON.CLAUDE_FILE_MISSING);
   }
   const parts = splitRead(read.text);
-  const live = parseLive(parts.live);
+  const parsed = parseLive(parts.live);
+  const live = parsed !== null && parsed.rateLimited ? null : parsed;
   const byOrg = parts.history.trim() === '' ? new Map() : samplesByOrg(parts.history);
   if (byOrg === null) {
     return unexpected(REASON.FILE_FORMAT_CHANGED);
@@ -235,7 +247,7 @@ export const claudeDesktop = Object.freeze({
   id: 'claude',
   title: 'Claude',
   kind: KIND.LOCAL,
-  minIntervalSeconds: NO_MIN_INTERVAL_SECONDS,
+  minIntervalSeconds: MIN_INTERVAL_SECONDS,
   needsKey: false,
   keyHelp: '',
   fields: Object.freeze([Object.freeze({ id: 'org', label: 'Organization', typed: false })]),

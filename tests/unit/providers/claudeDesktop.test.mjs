@@ -9,7 +9,7 @@ import { checkAccount, discoverAccounts } from '../../../package/contents/code/c
 import { ERROR_KIND, REASON, failure } from '../../../package/contents/code/core/http.mjs';
 import { HOUR_MS, WEEK_MS } from '../../../package/contents/code/core/units.mjs';
 import { PERIOD, makeUsage, usageWindow } from '../../../package/contents/code/core/usage.mjs';
-import { fakeHome, placeFixture, placeText, shellRunner, removeFakeHomes } from '../support/localFiles.mjs';
+import { fakeHome, placeFixture, placeText, shellRunner, removeFakeHomes, fakeCurl, curlCall } from '../support/localFiles.mjs';
 
 afterEach(removeFakeHomes);
 
@@ -169,4 +169,78 @@ test('the card gets the estimates marked as estimates', async () => {
     [PERIOD.FIVE_HOUR, BASE + 7.5 * MINUTE + 5 * HOUR_MS, true],
     [PERIOD.WEEKLY, BASE + 7.5 * MINUTE + WEEK_MS, true],
   ]);
+});
+
+const LIVE_REPLY = Object.freeze({
+  five_hour: { utilization: 34, resets_at: '2026-10-18T14:40:00.136476+00:00' },
+  seven_day: { utilization: 53, resets_at: '2026-10-22T04:00:00.136492+00:00' },
+  seven_day_opus: null,
+});
+
+const LIVE_USAGE = makeUsage({ windows: [
+  usageWindow(PERIOD.FIVE_HOUR, '', 34, Date.UTC(2026, 9, 18, 14, 40)),
+  usageWindow(PERIOD.WEEKLY, '', 53, Date.UTC(2026, 9, 22, 4)),
+] });
+
+// The read command compares the token expiry with the real clock, not NOW.
+function placeClaudeLogin(home, org, expiresAt) {
+  placeText(home, '.claude/.credentials.json', JSON.stringify({ claudeAiOauth: { accessToken: 'claude-token', refreshToken: 'r', expiresAt: expiresAt } }));
+  placeText(home, '.claude.json', JSON.stringify({ oauthAccount: { organizationUuid: org } }));
+}
+
+function liveTools(home, env) {
+  return { runCommand: shellRunner(home, env).runCommand, clock: () => NOW, newBoundary: () => '' };
+}
+
+test('the live usage API read with the Claude Code token wins over the desktop app history', async () => {
+  const home = homeWithFixture();
+  placeClaudeLogin(home, ORG_A, Date.now() + HOUR_MS);
+  const env = fakeCurl(home, LIVE_REPLY);
+  assert.deepEqual(await checkAccount(claudeDesktop, account(ORG_A), liveTools(home, env)), { ok: true, usage: LIVE_USAGE });
+  const call = curlCall(home);
+  assert.equal(call.stdin, 'Authorization: Bearer claude-token\n');
+  assert.ok(call.args.includes('https://api.anthropic.com/api/oauth/usage'));
+  assert.ok(!call.args.some((arg) => arg.includes('claude-token')));
+});
+
+test('the live usage works without a desktop app history file', async () => {
+  const home = fakeHome();
+  placeClaudeLogin(home, ORG_A, Date.now() + HOUR_MS);
+  const env = fakeCurl(home, LIVE_REPLY);
+  assert.deepEqual(await checkAccount(claudeDesktop, account(ORG_A), liveTools(home, env)), { ok: true, usage: LIVE_USAGE });
+});
+
+test('an expired token skips the API, and the next refresh after Claude Code renews it reads it live again', async () => {
+  const home = homeWithFixture();
+  placeClaudeLogin(home, ORG_A, Date.now() - HOUR_MS);
+  const env = fakeCurl(home, LIVE_REPLY);
+  const expired = await checkAccount(claudeDesktop, account(ORG_A), liveTools(home, env));
+  assert.equal(curlCall(home), null);
+  assert.ok(expired.ok && expired.usage.windows.every((window) => window.estimated));
+  placeClaudeLogin(home, ORG_A, Date.now() + HOUR_MS);
+  assert.deepEqual(await checkAccount(claudeDesktop, account(ORG_A), liveTools(home, env)), { ok: true, usage: LIVE_USAGE });
+});
+
+test('a failing live usage API falls back to the desktop app history', async () => {
+  const home = homeWithFixture();
+  placeClaudeLogin(home, ORG_A, Date.now() + HOUR_MS);
+  const env = fakeCurl(home, null);
+  const outcome = await checkAccount(claudeDesktop, account(ORG_A), liveTools(home, env));
+  assert.ok(outcome.ok && outcome.usage.windows.every((window) => window.estimated));
+});
+
+test('live usage of another organization never shows on this account', async () => {
+  const home = homeWithFixture();
+  placeClaudeLogin(home, ORG_B, Date.now() + HOUR_MS);
+  const env = fakeCurl(home, LIVE_REPLY);
+  const outcome = await checkAccount(claudeDesktop, account(ORG_A), liveTools(home, env));
+  assert.ok(outcome.ok && outcome.usage.windows.every((window) => window.estimated));
+});
+
+test('discovery offers the organization of the Claude Code login with its live usage', async () => {
+  const home = fakeHome();
+  placeClaudeLogin(home, ORG_A, Date.now() + HOUR_MS);
+  const env = fakeCurl(home, LIVE_REPLY);
+  const found = await discoverAccounts(claudeDesktop, liveTools(home, env));
+  assert.deepEqual(found.items, [{ fields: { org: ORG_A }, usage: LIVE_USAGE }]);
 });

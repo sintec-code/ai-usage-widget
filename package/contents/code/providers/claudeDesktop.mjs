@@ -3,7 +3,7 @@ import { toFiniteNumber, isPlainObject } from '../core/values.mjs';
 import { MINUTE_MS, HOUR_MS, WEEK_MS } from '../core/units.mjs';
 import { PERIOD, DISCOVERY, makeUsage, usageWindow, succeeded, unexpected, notAvailable } from '../core/usage.mjs';
 import { isValidField } from '../core/accounts.mjs';
-import { fileReadCommand } from '../core/localRead.mjs';
+import { LIMIT, FOUND_LINE, MISSING_OUTPUT, wrapRead } from '../core/localRead.mjs';
 import { KIND } from '../core/providerKind.mjs';
 import { NO_MIN_INTERVAL_SECONDS } from './common.mjs';
 
@@ -18,7 +18,78 @@ const WINDOWS = [
   { field: 'sd', period: PERIOD.WEEKLY, lengthMs: WEEK_MS, estimate: (samples, now) => estimateWeeklyReset(samples, now) },
 ];
 
-export const READ_HISTORY_COMMAND = fileReadCommand('"${XDG_CONFIG_HOME:-$HOME/.config}/Claude/plan-usage-history.json"', MAX_HISTORY_BYTES);
+export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+export const API_TIMEOUT_SECONDS = 4;
+
+// Reduces the live usage API answer to one compact JSON line:
+// {"org": "...", "fh": {"p": percent, "r": resetMs}, "sd": {...}}
+const LIVE_FILTER = String.raw`def ts: try (sub(\"[.][0-9]+\"; \"\") | sub(\"[+]00:00$\"; \"Z\") | fromdateiso8601 * 1000) catch null; `
+  + String.raw`def w: if . == null or .utilization == null then null else {p: .utilization, r: (.resets_at | if . == null then null else ts end)} end; `
+  + String.raw`select(.five_hour != null or .seven_day != null) | {org: \$o, fh: (.five_hour | w), sd: (.seven_day | w)}`;
+
+// Reads the live usage with the Claude Code OAuth token. The credentials file is
+// read again on every refresh, so a token renewed by Claude Code is picked up on
+// the next cycle. An expired token is skipped to avoid failing calls; the token
+// goes to curl through stdin so it never appears in the process list.
+const READ_LIVE_SCRIPT = String.raw`live=""; c="$HOME/.claude/.credentials.json"; `
+  + String.raw`if [ -n "$(command -v curl)" ] && [ -n "$(command -v jq)" ] && [ -f "$c" ]; then `
+  + String.raw`a=$(jq -r ".claudeAiOauth.accessToken // empty" "$c" 2>/dev/null); `
+  + String.raw`exp=$(jq -r ".claudeAiOauth.expiresAt // 0 | floor" "$c" 2>/dev/null); `
+  + String.raw`org=$(jq -r ".oauthAccount.organizationUuid // empty" "$HOME/.claude.json" 2>/dev/null); `
+  + String.raw`now=$(date +%s); `
+  + String.raw`if [ -n "$a" ] && [ -n "$org" ] && [ "$exp" -gt "$now"000 ] 2>/dev/null; then `
+  + String.raw`live=$(printf "Authorization: Bearer %s\n" "$a" | curl -fsS --proto =https --max-redirs 0 -m ` + API_TIMEOUT_SECONDS
+  + String.raw` -H @- -H "anthropic-beta: oauth-2025-04-20" ` + USAGE_URL
+  + String.raw` 2>/dev/null | jq -c --arg o "$org" "` + LIVE_FILTER + String.raw`" 2>/dev/null); `
+  + String.raw`fi; fi; `;
+
+// Output after the "found <size>" line: the live JSON line (empty when the API
+// was not reachable), a newline, then the Claude Desktop history file, if any.
+export const READ_HISTORY_COMMAND = wrapRead(READ_LIVE_SCRIPT
+  + 'f="${XDG_CONFIG_HOME:-$HOME/.config}/Claude/plan-usage-history.json"; hist=""; '
+  + 'if [ -f "$f" ] && [ ! -L "$f" ]; then hist=yes; fi; '
+  + 'if [ -z "$live" ] && [ -z "$hist" ]; then ' + MISSING_OUTPUT + '; else '
+  + 'hs=0; if [ -n "$hist" ]; then hs=$(' + LIMIT + ' wc -c < "$f" | tr -d " "); fi; '
+  + 'ls=$(printf "%s" "$live" | wc -c | tr -d " "); '
+  + 'printf "' + FOUND_LINE + ' %s\\n" $((ls + 1 + hs)); printf "%s\\n" "$live"; '
+  + 'if [ -n "$hist" ]; then ' + LIMIT + ' head -c ' + MAX_HISTORY_BYTES + ' -- "$f"; fi; fi');
+
+function splitRead(text) {
+  const lineEnd = text.indexOf('\n');
+  return lineEnd === -1 ? { live: text, history: '' } : { live: text.slice(0, lineEnd), history: text.slice(lineEnd + 1) };
+}
+
+function liveWindowOf(value) {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  const percent = typeof value.p === 'number' ? toFiniteNumber(value.p) : null;
+  const reset = typeof value.r === 'number' ? toFiniteNumber(value.r) : null;
+  return percent === null ? null : { percent: percent, reset: reset };
+}
+
+export function parseLive(line) {
+  if (typeof line !== 'string' || line.trim() === '') {
+    return null;
+  }
+  let value;
+  try {
+    value = JSON.parse(line);
+  } catch (error) {
+    return null;
+  }
+  if (!isPlainObject(value) || !isValidField(value.org)) {
+    return null;
+  }
+  const windows = [];
+  WINDOWS.forEach((spec) => {
+    const window = liveWindowOf(value[spec.field]);
+    if (window !== null) {
+      windows.push(usageWindow(spec.period, '', window.percent, window.reset));
+    }
+  });
+  return windows.length === 0 ? null : { org: value.org, usage: makeUsage({ windows: windows }) };
+}
 
 function readSample(value) {
   if (!isPlainObject(value) || !isValidField(value.org) || !isPlainObject(value.u)) {
@@ -122,7 +193,15 @@ function interpret(read, account, now) {
   if (!read.found) {
     return notAvailable(REASON.CLAUDE_FILE_MISSING);
   }
-  const byOrg = samplesByOrg(read.text);
+  const parts = splitRead(read.text);
+  const live = parseLive(parts.live);
+  if (live !== null && live.org === account.org) {
+    return succeeded(live.usage);
+  }
+  if (parts.history.trim() === '') {
+    return notAvailable(REASON.CLAUDE_FILE_MISSING);
+  }
+  const byOrg = samplesByOrg(parts.history);
   if (byOrg === null) {
     return unexpected(REASON.FILE_FORMAT_CHANGED);
   }
@@ -137,13 +216,18 @@ function discover(read, now) {
   if (!read.found) {
     return notAvailable(REASON.CLAUDE_FILE_MISSING);
   }
-  const byOrg = samplesByOrg(read.text);
+  const parts = splitRead(read.text);
+  const live = parseLive(parts.live);
+  const byOrg = parts.history.trim() === '' ? new Map() : samplesByOrg(parts.history);
   if (byOrg === null) {
     return unexpected(REASON.FILE_FORMAT_CHANGED);
   }
   const items = Array.from(byOrg.keys()).sort()
-    .map((org) => ({ fields: { org: org }, usage: usageOf(byOrg.get(org), now) }))
+    .map((org) => ({ fields: { org: org }, usage: live !== null && live.org === org ? live.usage : usageOf(byOrg.get(org), now) }))
     .filter((item) => item.usage !== null);
+  if (live !== null && !byOrg.has(live.org)) {
+    items.push({ fields: { org: live.org }, usage: live.usage });
+  }
   return { ok: true, items: items };
 }
 

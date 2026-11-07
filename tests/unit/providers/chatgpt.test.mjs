@@ -6,7 +6,7 @@ import { chatgpt, MAX_LINE_BYTES, MAX_FILES } from '../../../package/contents/co
 import { checkAccount } from '../../../package/contents/code/core/check.mjs';
 import { ERROR_KIND, REASON, failure } from '../../../package/contents/code/core/http.mjs';
 import { PERIOD, makeUsage, usageWindow } from '../../../package/contents/code/core/usage.mjs';
-import { fakeHome, placeFixture, placeText, shellRunner, removeFakeHomes } from '../support/localFiles.mjs';
+import { fakeHome, placeFixture, placeText, shellRunner, removeFakeHomes, fakeCurl, curlCall } from '../support/localFiles.mjs';
 
 afterEach(removeFakeHomes);
 
@@ -134,4 +134,58 @@ test('a line longer than the cap is refused', async () => {
   const home = fakeHome();
   placeText(home, '.codex/sessions/2026/10/18/rollout-x.jsonl', line({ primary: { used_percent: 5, window_minutes: 300, resets_at: 1 }, pad: 'x'.repeat(MAX_LINE_BYTES) }));
   assert.deepEqual(await check(home), { ok: false, error: failure(ERROR_KIND.UNEXPECTED_ANSWER, REASON.FILE_TOO_LARGE, null, { size: MAX_LINE_BYTES }) });
+});
+
+const LIVE_REPLY = Object.freeze({
+  plan_type: 'plus',
+  rate_limit: {
+    allowed: true,
+    primary_window: { used_percent: 9, limit_window_seconds: 18000, reset_after_seconds: 100, reset_at: 1792335600 },
+    secondary_window: { used_percent: 1, limit_window_seconds: 604800, reset_after_seconds: 200, reset_at: 1792800000 },
+  },
+});
+
+const LIVE_WINDOWS = [
+  usageWindow(PERIOD.FIVE_HOUR, '', 9, 1792335600000),
+  usageWindow(PERIOD.WEEKLY, '', 1, 1792800000000),
+];
+
+function placePiToken(home) {
+  placeText(home, '.pi/agent/auth.json', JSON.stringify({ 'openai-codex': { type: 'oauth', access: 'pi-token', refresh: 'r', expires: 1, accountId: 'acct-pi' } }));
+}
+
+test('the live usage API read with the pi token wins over the Codex session files', async () => {
+  const home = fakeHome();
+  placeFixture(home, '.codex/sessions/2026/10/18/rollout-2026-10-18T12-00-00-placeholder.jsonl', FIXTURE);
+  placePiToken(home);
+  const env = fakeCurl(home, LIVE_REPLY);
+  assert.deepEqual(await check(home, env), { ok: true, usage: makeUsage({ windows: LIVE_WINDOWS }) });
+  const call = curlCall(home);
+  assert.equal(call.stdin, 'Authorization: Bearer pi-token\nChatGPT-Account-Id: acct-pi\n');
+  assert.ok(call.args.includes('https://chatgpt.com/backend-api/wham/usage'));
+  assert.ok(!call.args.some((arg) => arg.includes('pi-token')));
+});
+
+test('without a pi token the Codex login token reads the live usage', async () => {
+  const home = fakeHome();
+  placeText(home, '.codex/auth.json', JSON.stringify({ tokens: { access_token: 'codex-token', account_id: 'acct-codex' } }));
+  const env = fakeCurl(home, LIVE_REPLY);
+  assert.deepEqual(await check(home, env), { ok: true, usage: makeUsage({ windows: LIVE_WINDOWS }) });
+  assert.equal(curlCall(home).stdin, 'Authorization: Bearer codex-token\nChatGPT-Account-Id: acct-codex\n');
+});
+
+test('a failing live usage API falls back to the newest Codex session file', async () => {
+  const home = fakeHome();
+  placeFixture(home, '.codex/sessions/2026/10/18/rollout-2026-10-18T12-00-00-placeholder.jsonl', FIXTURE);
+  placePiToken(home);
+  const env = fakeCurl(home, null);
+  assert.deepEqual((await check(home, env)).usage.windows.map((item) => item.usedPercent), [37.5, 62]);
+});
+
+test('an API answer without a primary window falls back to the Codex session file', async () => {
+  const home = fakeHome();
+  placeFixture(home, '.codex/sessions/2026/10/18/rollout-2026-10-18T12-00-00-placeholder.jsonl', FIXTURE);
+  placePiToken(home);
+  const env = fakeCurl(home, { rate_limit: null });
+  assert.deepEqual((await check(home, env)).usage.windows.map((item) => item.usedPercent), [37.5, 62]);
 });

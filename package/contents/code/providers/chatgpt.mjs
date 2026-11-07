@@ -12,14 +12,38 @@ const WINDOW_FIELDS = ['primary', 'secondary'];
 
 export const MAX_FILES = 20;
 
-export const READ_SESSION_COMMAND = wrapRead('d="$HOME/.codex/sessions"; '
+export const USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
+
+export const API_TIMEOUT_SECONDS = 3;
+
+// Converts the live usage API answer into the same JSON line shape that Codex
+// writes to its rollout files, so interpret() handles both sources.
+const API_TO_ROLLOUT_FILTER = String.raw`def w: if . == null then null else {used_percent: .used_percent, window_minutes: (.limit_window_seconds / 60), resets_at: .reset_at} end; select(.rate_limit.primary_window != null) | {timestamp: (now | todate), payload: {rate_limits: {primary: (.rate_limit.primary_window | w), secondary: (.rate_limit.secondary_window | w)}}}`;
+
+// Reads the live ChatGPT usage with the OAuth token stored by pi or by Codex.
+// The token goes to curl through stdin so it never appears in the process list.
+// Leaves $line empty when no token works, so the rollout file fallback runs.
+const READ_API_SCRIPT = String.raw`line=""; codex_auth="$HOME/.codex/auth.json"; `
+  + String.raw`if [ -n "$CODEX_HOME" ]; then codex_auth="$CODEX_HOME/auth.json"; fi; `
+  + String.raw`if [ -n "$(command -v curl)" ] && [ -n "$(command -v jq)" ]; then `
+  + String.raw`for src in pi codex; do `
+  + String.raw`if [ "$src" = pi ]; then a=$(jq -r ".\"openai-codex\".access // empty" "$HOME/.pi/agent/auth.json" 2>/dev/null); id=$(jq -r ".\"openai-codex\".accountId // empty" "$HOME/.pi/agent/auth.json" 2>/dev/null); `
+  + String.raw`else a=$(jq -r ".tokens.access_token // empty" "$codex_auth" 2>/dev/null); id=$(jq -r ".tokens.account_id // empty" "$codex_auth" 2>/dev/null); fi; `
+  + String.raw`if [ -n "$a" ]; then `
+  + String.raw`line=$(printf "Authorization: Bearer %s\nChatGPT-Account-Id: %s\n" "$a" "$id" | curl -fsS --proto =https --max-redirs 0 -m ` + API_TIMEOUT_SECONDS
+  + String.raw` -H @- -H "User-Agent: codex_cli_rs" ` + USAGE_URL + String.raw` 2>/dev/null | jq -ce "` + API_TO_ROLLOUT_FILTER + String.raw`" 2>/dev/null); `
+  + String.raw`if [ -n "$line" ]; then break; fi; fi; done; fi; `;
+
+export const READ_SESSION_COMMAND = wrapRead(READ_API_SCRIPT
+  + 'if [ -n "$line" ]; then ' + foundOutput('line') + '; else '
+  + 'd="$HOME/.codex/sessions"; '
   + 'if [ -n "${CODEX_HOME:-}" ] && [ -d "$CODEX_HOME/sessions" ]; then d="$CODEX_HOME/sessions"; fi; '
   + 'files=$(' + LIMIT + ' find "$d" -type f -name "rollout-*.jsonl" -printf "%T@ %p\\n" 2>/dev/null | sort -rn | head -n ' + MAX_FILES + ' | cut -d " " -f 2-); '
   + 'if [ -z "$files" ]; then ' + MISSING_OUTPUT + '; else '
   + 'line=$(printf "%s\\n" "$files" | while IFS= read -r f; do '
   + 'if [ -f "$f" ] && [ ! -L "$f" ]; then l=$(' + LIMIT + ' grep -F "\\"rate_limits\\":{" -- "$f" | tail -n 1 | head -c ' + (MAX_LINE_BYTES + 1) + '); '
   + 'if [ -n "$l" ]; then printf "%s" "$l"; break; fi; fi; done); '
-  + foundOutput('line') + '; fi');
+  + foundOutput('line') + '; fi; fi');
 
 function resetTime(value, lineTime) {
   const resetsAt = typeof value.resets_at === 'number' ? toFiniteNumber(value.resets_at) : null;

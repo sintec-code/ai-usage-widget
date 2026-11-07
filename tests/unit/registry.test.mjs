@@ -47,7 +47,19 @@ test('a local provider needs no key, reads with a fixed command and caps what it
     assert.equal(provider.needsKey, false, provider.id);
     assert.equal(typeof provider.readCommand, 'string', provider.id);
     assert.ok(provider.maxReadBytes > 0, provider.id);
-    assert.doesNotMatch(provider.readCommand, /secret-tool|curl|(^|[^2])>/, provider.id);
+    assert.doesNotMatch(provider.readCommand, /secret-tool|(^|[^2])>/, provider.id);
+  });
+});
+
+test('only the Claude and ChatGPT local providers call an API, over HTTPS only and with the token on stdin', () => {
+  const local = ALL_PROVIDERS.filter((provider) => provider.kind === KIND.LOCAL);
+  assert.deepEqual(local.filter((provider) => /curl/.test(provider.readCommand)).map((p) => p.id), ['claude', 'chatgpt']);
+  local.filter((provider) => /curl/.test(provider.readCommand)).forEach((provider) => {
+    const calls = provider.readCommand.match(/\| curl [^|]*/g);
+    assert.equal(calls.length, 1, provider.id);
+    assert.match(calls[0], /^\| curl -fsS --proto =https --max-redirs 0 -m \d+ -H @- /, provider.id);
+    assert.match(calls[0], / https:\/\/[^ ]+ 2>\/dev\/null $/, provider.id);
+    assert.doesNotMatch(calls[0], /\$a|Bearer/, provider.id);
   });
 });
 

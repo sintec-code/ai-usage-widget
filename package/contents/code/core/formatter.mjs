@@ -331,9 +331,15 @@ function isSameDay(a, b) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-export function formatClock(time, now) {
+// Default time of day format; the widget passes the locale format instead.
+export function clock24(time) {
   const date = new Date(time);
-  const clock = pad2(date.getHours()) + ':' + pad2(date.getMinutes());
+  return pad2(date.getHours()) + ':' + pad2(date.getMinutes());
+}
+
+export function formatClock(time, now, timeText = clock24) {
+  const date = new Date(time);
+  const clock = timeText(time);
   if (isSameDay(date, new Date(now))) {
     return clock;
   }
@@ -364,33 +370,32 @@ export function isWindowActive(item, now) {
   return reset && valid;
 }
 
-export function formatWeekdayClock(time) {
-  const date = new Date(time);
-  return WEEKDAYS[date.getDay()] + ' ' + pad2(date.getHours()) + ':' + pad2(date.getMinutes());
+export function formatWeekdayClock(time, timeText = clock24) {
+  return WEEKDAYS[new Date(time).getDay()] + ' ' + timeText(time);
 }
 
-function estimatedResetText(item, now) {
-  return 'Resets about ' + (item.period === PERIOD.WEEKLY ? formatWeekdayClock(item.resetsAt) : formatClock(item.resetsAt, now));
+function estimatedResetText(item, now, timeText) {
+  return 'Resets about ' + (item.period === PERIOD.WEEKLY ? formatWeekdayClock(item.resetsAt, timeText) : formatClock(item.resetsAt, now, timeText));
 }
 
-function resetText(item, now, isExpired) {
+function resetText(item, now, isExpired, timeText) {
   if (isExpired) {
-    return item.resetsAt !== null && item.resetsAt <= now ? 'Reset at ' + formatClock(item.resetsAt, now) + ', no newer data' : 'No newer data';
+    return item.resetsAt !== null && item.resetsAt <= now ? 'Reset at ' + formatClock(item.resetsAt, now, timeText) + ', no newer data' : 'No newer data';
   }
   if (item.resetsAt === null) {
     return '';
   }
-  return item.estimated ? estimatedResetText(item, now) : 'Resets in ' + formatDuration(item.resetsAt - now) + ' (' + formatClock(item.resetsAt, now) + ')';
+  return item.estimated ? estimatedResetText(item, now, timeText) : 'Resets in ' + formatDuration(item.resetsAt - now) + ' (' + formatClock(item.resetsAt, now, timeText) + ')';
 }
 
-function windowView(item, now) {
+function windowView(item, now, timeText) {
   const isExpired = !isWindowActive(item, now);
   return {
     label: windowLabel(item),
     percentText: formatPercent(item.usedPercent),
     fraction: Math.min(Math.max(item.usedPercent / PERCENT, 0), 1),
     severity: isExpired ? SEVERITY.UNKNOWN : severityFor(item.usedPercent),
-    resetText: resetText(item, now, isExpired),
+    resetText: resetText(item, now, isExpired, timeText),
     isExpired: isExpired,
   };
 }
@@ -462,18 +467,18 @@ function extraRows(usage, extraWindows) {
 
 const NO_USAGE = Object.freeze({ windows: [], amounts: [], counts: [], texts: [] });
 
-function mainBarView(item, now) {
-  return Object.assign(windowView(item, now), { label: periodText(item) });
+function mainBarView(item, now, timeText) {
+  return Object.assign(windowView(item, now, timeText), { label: periodText(item) });
 }
 
-function sectionView(entry, now) {
+function sectionView(entry, now, timeText) {
   const usage = entry.usage || NO_USAGE;
   const split = splitWindows(usage.windows, now);
   return {
     key: entry.key,
     title: entry.title,
     account: entry.account.name,
-    windows: split.main.map((item) => mainBarView(item, now)),
+    windows: split.main.map((item) => mainBarView(item, now, timeText)),
     mainRows: mainAmounts(usage.amounts).map(amountRow),
     rows: extraRows(usage, split.extra),
     isLoading: entry.isLoading,
@@ -487,8 +492,10 @@ export function usageSummaryText(usage) {
   return usage.windows.map((item) => windowLabel(item) + ' ' + formatPercent(item.usedPercent)).join(', ');
 }
 
-export function buildViewModel(entries, now) {
-  const sections = entries.map((entry) => sectionView(entry, now));
+// options.timeText(ms) formats a time of day; it defaults to 24 hour HH:MM.
+export function buildViewModel(entries, now, options) {
+  const timeText = options && typeof options.timeText === 'function' ? options.timeText : clock24;
+  const sections = entries.map((entry) => sectionView(entry, now, timeText));
   const sectionsByKey = Object.create(null);
   sections.forEach((section) => { sectionsByKey[section.key] = section; });
   return {

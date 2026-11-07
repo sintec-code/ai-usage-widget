@@ -374,3 +374,27 @@ test('an estimated reset says about, with the weekday for the weekly window', ()
   assert.deepEqual(section.windows.map((item) => item.resetText), ['Resets about 14:30', 'Resets about Mon 14:30']);
   assert.equal(formatWeekdayClock(Date.UTC(2026, 9, 18, 9, 5)), 'Sun 09:05');
 });
+
+function twelveHour(time) {
+  const date = new Date(time);
+  const hours = date.getHours() % 12 === 0 ? 12 : date.getHours() % 12;
+  return hours + ':' + String(date.getMinutes()).padStart(2, '0') + (date.getHours() < 12 ? ' a.m.' : ' p.m.');
+}
+
+test('clock times use the time format the widget passes in, such as the 12 hour locale format', () => {
+  assert.equal(formatClock(Date.UTC(2026, 9, 18, 14, 5), NOW, twelveHour), '2:05 p.m.');
+  assert.equal(formatClock(Date.UTC(2026, 9, 19, 9, 0), NOW, twelveHour), 'Mon 9:00 a.m.');
+  assert.equal(formatWeekdayClock(Date.UTC(2026, 9, 18, 0, 5), twelveHour), 'Sun 12:05 a.m.');
+  const usage = makeUsage({ windows: [
+    usageWindow(PERIOD.FIVE_HOUR, '', 40, NOW + 2 * HOUR_MS + 5 * MINUTE_MS),
+    usageWindow(PERIOD.WEEKLY, '', 20, Date.UTC(2026, 9, 19, 14, 30), { estimated: true }),
+    usageWindow(PERIOD.MONTHLY, '', 95, NOW - MINUTE_MS),
+  ] });
+  const section = buildViewModel([applySuccess(entry('chatgpt', 'x', 'ChatGPT'), usage, NOW)], NOW, { timeText: twelveHour }).sections[0];
+  assert.deepEqual(section.windows.map((item) => item.resetText), ['Resets in 2 h 5 min (2:05 p.m.)', 'Resets about Mon 2:30 p.m.', 'Reset at 11:59 a.m., no newer data']);
+});
+
+test('without a time format the clock stays at 24 hours', () => {
+  const usage = makeUsage({ windows: [usageWindow(PERIOD.FIVE_HOUR, '', 40, NOW + 2 * HOUR_MS + 5 * MINUTE_MS)] });
+  assert.equal(buildViewModel([applySuccess(entry('chatgpt', 'x', 'ChatGPT'), usage, NOW)], NOW, {}).sections[0].windows[0].resetText, 'Resets in 2 h 5 min (14:05)');
+});

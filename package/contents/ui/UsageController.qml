@@ -29,7 +29,9 @@ Item {
     readonly property var providers: Registry.ALL_PROVIDERS
     readonly property int refreshSeconds: Accounts.refreshSeconds(settingsValues.refreshSeconds)
     property var accounts: []
-    property var viewModel: Formatter.buildViewModel([], clock())
+    // Times of day follow the locale short format, for example "5:40 p.m." for es_MX.
+    readonly property var viewOptions: ({ timeText: time => new Date(time).toLocaleTimeString(Qt.locale(), Locale.ShortFormat) })
+    property var viewModel: Formatter.buildViewModel([], clock(), viewOptions)
     readonly property ListModel sectionModel: ListModel {}
     readonly property var tools: ({
         runCommand: (command, timeoutMs) => commandRunner.run(command, timeoutMs),
@@ -58,7 +60,7 @@ Item {
     }
 
     function refreshView() {
-        const next = Formatter.buildViewModel(monitor.snapshot(), clock())
+        const next = Formatter.buildViewModel(monitor.snapshot(), clock(), viewOptions)
         viewModel = next
         syncSections(next.keys)
     }

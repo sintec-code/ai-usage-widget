@@ -2,6 +2,8 @@
 
 A KDE Plasma panel and desktop widget that shows AI limits, spend and balance for several services and accounts in one place.
 
+This is a fork of [Lukk17/ai-usage-widget](https://github.com/Lukk17/ai-usage-widget) with its own plugin id (`com.github.sinteccode.aiusage`), so updates of the original widget never replace it. It keeps the same settings file, `ai-usage-widgetrc`, so accounts added in the original carry over.
+
 [![license](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE) [![plasma](https://img.shields.io/badge/KDE%20Plasma-6.4%2B-1d99f3)](https://kde.org/plasma-desktop/) [![curl](https://img.shields.io/badge/curl-8.4%2B-073551)](https://curl.se/) [![qt](https://img.shields.io/badge/Qt-6-41cd52)](https://www.qt.io/) [![services](https://img.shields.io/badge/services-11-orange)](#services-and-endpoints) [![unit tests](https://img.shields.io/badge/unit%20tests-447-brightgreen)](tests/unit) [![qml tests](https://img.shields.io/badge/QML%20tests-53-brightgreen)](tests/qml)
 
 ---
@@ -45,7 +47,7 @@ systemctl --user restart plasma-plasmashell
 To remove the widget package:
 
 ```bash
-kpackagetool6 -t Plasma/Applet -r com.github.lukk17.aiusage
+kpackagetool6 -t Plasma/Applet -r com.github.sinteccode.aiusage
 ```
 
 ---

@@ -3,7 +3,7 @@ set -euo pipefail
 
 PACKAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/package"
 readonly PACKAGE_DIR
-readonly PLUGIN_ID="com.github.lukk17.aiusage"
+readonly PLUGIN_ID="com.github.sinteccode.aiusage"
 readonly VIEWER_SECONDS=15
 
 HOME="$(mktemp -d)"

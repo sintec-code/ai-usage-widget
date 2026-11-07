@@ -244,7 +244,7 @@ test('a card shows the service and the typed name, the main bars by period with 
   const section = view.sections[0];
   assert.equal(section.title, 'Requesty');
   assert.equal(section.account, 'me@example.com');
-  assert.deepEqual(section.windows[0], { label: '5hr', percentText: '85%', fraction: 0.848, severity: SEVERITY.WARNING, resetText: 'Resets in 2 h 5 min (14:05)', isExpired: false });
+  assert.deepEqual(section.windows[0], { label: '5hr', percentText: '85%', fraction: 0.848, severity: SEVERITY.WARNING, resetText: 'Resets in 2 h 5 min (14:05)', isExpired: false, elapsedFraction: 175 / 300, rateText: '29%/h' });
   assert.deepEqual(section.windows.map((item) => [item.label, item.resetText]), [['5hr', 'Resets in 2 h 5 min (14:05)'], ['weekly', '']]);
   assert.deepEqual(section.mainRows, [{ label: 'Balance', valueText: '$7.00', isProblem: false }, { label: 'Spent this month', valueText: '$12.35 of $50.00', isProblem: false }]);
   assert.deepEqual(section.rows, [
@@ -397,4 +397,45 @@ test('clock times use the time format the widget passes in, such as the 12 hour 
 test('without a time format the clock stays at 24 hours', () => {
   const usage = makeUsage({ windows: [usageWindow(PERIOD.FIVE_HOUR, '', 40, NOW + 2 * HOUR_MS + 5 * MINUTE_MS)] });
   assert.equal(buildViewModel([applySuccess(entry('chatgpt', 'x', 'ChatGPT'), usage, NOW)], NOW, {}).sections[0].windows[0].resetText, 'Resets in 2 h 5 min (14:05)');
+});
+
+test('a main bar knows how much of its window has passed and how fast it is used per hour', () => {
+  const usage = makeUsage({ windows: [
+    usageWindow(PERIOD.FIVE_HOUR, '', 30, NOW + 2 * HOUR_MS),
+    usageWindow(PERIOD.WEEKLY, '', 20, NOW + 84 * HOUR_MS),
+    usageWindow(PERIOD.MONTHLY, '', 10, NOW + 24 * HOUR_MS),
+  ] });
+  const windows = buildViewModel([applySuccess(entry('chatgpt', 'x', 'ChatGPT'), usage, NOW)], NOW).sections[0].windows;
+  assert.deepEqual(windows.map((item) => [item.label, item.elapsedFraction, item.rateText]), [
+    ['5hr', 0.6, '10%/h'],
+    ['weekly', 0.5, '0.2%/h'],
+    ['monthly', null, ''],
+  ]);
+});
+
+test('a bar without a reset time, just started or expired has no elapsed marker or rate', () => {
+  const usage = makeUsage({ windows: [
+    usageWindow(PERIOD.FIVE_HOUR, '', 3, NOW + 5 * HOUR_MS - 2 * MINUTE_MS),
+    usageWindow(PERIOD.WEEKLY, '', 20, null),
+    usageWindow(PERIOD.DAILY, '', 50, NOW - MINUTE_MS),
+  ] });
+  const windows = buildViewModel([applySuccess(entry('chatgpt', 'x', 'ChatGPT'), usage, NOW)], NOW).sections[0].windows;
+  assert.deepEqual(windows.map((item) => [item.label, item.elapsedFraction, item.rateText]), [
+    ['5hr', 2 / 300, ''],
+    ['daily', null, ''],
+    ['weekly', null, ''],
+  ]);
+});
+
+test('a card carries its service, the service accent colour and a badge letter from the account name', () => {
+  const view = buildViewModel([
+    entry('claude', 'personal', 'Claude'),
+    entry('chatgpt', 'work@example.com', 'ChatGPT'),
+    entry('requesty', '', 'Requesty'),
+  ], NOW);
+  assert.deepEqual(view.sections.map((section) => [section.service, section.accent, section.badge]), [
+    ['claude', '#d97757', 'P'],
+    ['chatgpt', '#10a37f', 'W'],
+    ['requesty', '', 'R'],
+  ]);
 });

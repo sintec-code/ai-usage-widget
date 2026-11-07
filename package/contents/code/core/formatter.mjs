@@ -24,7 +24,27 @@ export const EMPTY_SECTION = Object.freeze({
   hasError: false,
   errorText: '',
   errorSeverity: SEVERITY.UNKNOWN,
+  service: '',
+  accent: '',
+  badge: '',
 });
+
+// Brand accent per service for the redesigned cards; other services use the theme colour.
+export const SERVICE_ACCENTS = Object.freeze({
+  claude: '#d97757',
+  chatgpt: '#10a37f',
+});
+
+// Length of each main window, used for the elapsed marker and the usage rate.
+const WINDOW_LENGTH_MS = Object.freeze({
+  [PERIOD.FIVE_HOUR]: 5 * HOUR_MS,
+  [PERIOD.DAILY]: DAY_MS,
+  [PERIOD.WEEKLY]: WEEK_MS,
+});
+
+// Below this much elapsed time a usage rate is too noisy to show.
+const MIN_RATE_ELAPSED_MS = 6 * MINUTE_MS;
+const WHOLE_RATE_FROM = 10;
 
 const WARNING_PERCENT = 75;
 const CRITICAL_PERCENT = 90;
@@ -388,8 +408,26 @@ function resetText(item, now, isExpired, timeText) {
   return item.estimated ? estimatedResetText(item, now, timeText) : 'Resets in ' + formatDuration(item.resetsAt - now) + ' (' + formatClock(item.resetsAt, now, timeText) + ')';
 }
 
+function elapsedMs(item, now, isExpired) {
+  const length = WINDOW_LENGTH_MS[item.period];
+  if (isExpired || length === undefined || item.resetsAt === null) {
+    return null;
+  }
+  return Math.min(Math.max(length - (item.resetsAt - now), 0), length);
+}
+
+function rateText(item, elapsed) {
+  if (elapsed === null || elapsed < MIN_RATE_ELAPSED_MS) {
+    return '';
+  }
+  const perHour = item.usedPercent / (elapsed / HOUR_MS);
+  const shown = perHour >= WHOLE_RATE_FROM ? String(Math.round(perHour)) : String(Math.round(perHour * 10) / 10);
+  return shown + '%/h';
+}
+
 function windowView(item, now, timeText) {
   const isExpired = !isWindowActive(item, now);
+  const elapsed = elapsedMs(item, now, isExpired);
   return {
     label: windowLabel(item),
     percentText: formatPercent(item.usedPercent),
@@ -397,6 +435,8 @@ function windowView(item, now, timeText) {
     severity: isExpired ? SEVERITY.UNKNOWN : severityFor(item.usedPercent),
     resetText: resetText(item, now, isExpired, timeText),
     isExpired: isExpired,
+    elapsedFraction: elapsed === null ? null : elapsed / WINDOW_LENGTH_MS[item.period],
+    rateText: rateText(item, elapsed),
   };
 }
 
@@ -485,7 +525,15 @@ function sectionView(entry, now, timeText) {
     hasError: entry.error !== null,
     errorText: entry.error ? describeError(entry.error) : '',
     errorSeverity: entry.error && CRITICAL_ERRORS.indexOf(entry.error.kind) !== -1 ? SEVERITY.CRITICAL : SEVERITY.WARNING,
+    service: entry.account.service,
+    accent: Object.prototype.hasOwnProperty.call(SERVICE_ACCENTS, entry.account.service) ? SERVICE_ACCENTS[entry.account.service] : '',
+    badge: badgeLetter(entry),
   };
+}
+
+function badgeLetter(entry) {
+  const source = String(entry.account.name || '').trim() || String(entry.title || '').trim();
+  return source === '' ? '' : source.charAt(0).toUpperCase();
 }
 
 export function usageSummaryText(usage) {

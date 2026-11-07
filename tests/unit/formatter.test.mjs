@@ -244,7 +244,7 @@ test('a card shows the service and the typed name, the main bars by period with 
   const section = view.sections[0];
   assert.equal(section.title, 'Requesty');
   assert.equal(section.account, 'me@example.com');
-  assert.deepEqual(section.windows[0], { label: '5hr', percentText: '85%', fraction: 0.848, severity: SEVERITY.WARNING, resetText: 'Resets in 2 h 5 min (14:05)', isExpired: false, elapsedFraction: 175 / 300, rateText: '29%/h' });
+  assert.deepEqual(section.windows[0], { label: '5hr', percentText: '85%', fraction: 0.848, severity: SEVERITY.WARNING, resetText: 'Resets in 2 h 5 min (14:05)', isExpired: false, elapsedFraction: 175 / 300, rateText: '29%/h', heading: 'Current session', shortLabel: 'Session' });
   assert.deepEqual(section.windows.map((item) => [item.label, item.resetText]), [['5hr', 'Resets in 2 h 5 min (14:05)'], ['weekly', '']]);
   assert.deepEqual(section.mainRows, [{ label: 'Balance', valueText: '$7.00', isProblem: false }, { label: 'Spent this month', valueText: '$12.35 of $50.00', isProblem: false }]);
   assert.deepEqual(section.rows, [
@@ -437,5 +437,21 @@ test('a card carries its service, the service accent colour and a badge letter f
     ['claude', '#d97757', 'P'],
     ['chatgpt', '#10a37f', 'W'],
     ['requesty', '', 'R'],
+  ]);
+});
+
+test('a main bar has a heading for the main card and a short label for the compact rows', () => {
+  const usage = makeUsage({ windows: [
+    usageWindow(PERIOD.FIVE_HOUR, '', 1, null),
+    usageWindow(PERIOD.DAILY, '', 2, null),
+    usageWindow(PERIOD.WEEKLY, '', 3, null),
+    usageWindow(PERIOD.MONTHLY, '', 4, null),
+  ] });
+  const windows = buildViewModel([applySuccess(entry('chatgpt', 'x', 'ChatGPT'), usage, NOW)], NOW).sections[0].windows;
+  assert.deepEqual(windows.map((item) => [item.heading, item.shortLabel]), [
+    ['Current session', 'Session'],
+    ['Daily limit', 'Day'],
+    ['Weekly limit', 'Week'],
+    ['Monthly limit', 'Month'],
   ]);
 });

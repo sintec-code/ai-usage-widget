@@ -16,6 +16,16 @@ PlasmaExtras.Representation {
     readonly property var viewModel: controller ? controller.viewModel : Formatter.buildViewModel([], 0)
     property bool settingsOpen: false
     property bool popupExpanded: true
+    // Account shown as the main card; kept in memory only.
+    property string selectedKey: ""
+    // The selected account when it has limits to show, else the first that has some.
+    readonly property string heroKey: {
+        const usable = full.viewModel.sections.filter(section => section.windows.length > 0)
+        if (usable.some(section => section.key === full.selectedKey)) {
+            return full.selectedKey
+        }
+        return usable.length > 0 ? usable[0].key : ""
+    }
 
     onPopupExpandedChanged: {
         if (!popupExpanded) {
@@ -130,16 +140,46 @@ PlasmaExtras.Representation {
                 Layout.fillWidth: true
             }
 
+            HeroCard {
+                visible: full.heroKey !== ""
+                section: full.viewModel.sectionsByKey[full.heroKey] || Formatter.EMPTY_SECTION
+                Layout.fillWidth: true
+                Layout.leftMargin: Kirigami.Units.largeSpacing
+                Layout.rightMargin: Kirigami.Units.largeSpacing
+            }
+
             Repeater {
                 model: full.controller ? full.controller.sectionModel : null
 
-                AccountCard {
-                    required property string key
+                Loader {
+                    id: slot
 
-                    section: full.viewModel.sectionsByKey[key] || Formatter.EMPTY_SECTION
+                    required property string key
+                    readonly property var section: full.viewModel.sectionsByKey[key] || Formatter.EMPTY_SECTION
+
+                    active: key !== full.heroKey
+                    visible: active
+                    sourceComponent: section.windows.length > 0 ? compactRow : fullCard
                     Layout.fillWidth: true
                     Layout.leftMargin: Kirigami.Units.largeSpacing
                     Layout.rightMargin: Kirigami.Units.largeSpacing
+
+                    Component {
+                        id: compactRow
+
+                        AccountRow {
+                            section: slot.section
+                            onSelected: full.selectedKey = slot.key
+                        }
+                    }
+
+                    Component {
+                        id: fullCard
+
+                        AccountCard {
+                            section: slot.section
+                        }
+                    }
                 }
             }
 

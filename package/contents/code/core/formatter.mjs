@@ -42,6 +42,14 @@ const WINDOW_LENGTH_MS = Object.freeze({
   [PERIOD.WEEKLY]: WEEK_MS,
 });
 
+// Heading on the main card and short label on the compact rows, per main period.
+const WINDOW_NAMES = Object.freeze({
+  [PERIOD.FIVE_HOUR]: { heading: 'Current session', shortLabel: 'Session' },
+  [PERIOD.DAILY]: { heading: 'Daily limit', shortLabel: 'Day' },
+  [PERIOD.WEEKLY]: { heading: 'Weekly limit', shortLabel: 'Week' },
+  [PERIOD.MONTHLY]: { heading: 'Monthly limit', shortLabel: 'Month' },
+});
+
 // Below this much elapsed time a usage rate is too noisy to show.
 const MIN_RATE_ELAPSED_MS = 6 * MINUTE_MS;
 const WHOLE_RATE_FROM = 10;
@@ -508,7 +516,9 @@ function extraRows(usage, extraWindows) {
 const NO_USAGE = Object.freeze({ windows: [], amounts: [], counts: [], texts: [] });
 
 function mainBarView(item, now, timeText) {
-  return Object.assign(windowView(item, now, timeText), { label: periodText(item) });
+  const label = periodText(item);
+  const names = WINDOW_NAMES[item.period] || { heading: label, shortLabel: label };
+  return Object.assign(windowView(item, now, timeText), { label: label, heading: names.heading, shortLabel: names.shortLabel });
 }
 
 function sectionView(entry, now, timeText) {
